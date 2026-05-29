@@ -13,7 +13,7 @@ with st.sidebar:
     n_edificios    = st.number_input("Número de edificios",    1, 10, 2)
     n_semanas      = st.slider("Semanas a planificar", 1, 30, 15)
     dif_edificios  = st.slider("Diferencia máxima entre edificios (Δ)", 0, 10, 2)
-    timeout        = st.slider("Tiempo máximo de resolución (s)", 10, 300, 60)
+    timeout        = st.slider("Tiempo máximo de resolución (s)", 10, 1800, 300)
 
     st.divider()
     st.caption("Turnos: 0 = Mañana, 1 = Tarde")
