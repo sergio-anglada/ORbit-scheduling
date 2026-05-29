@@ -1,10 +1,11 @@
 import streamlit as st
 import time
+import io
 from ortools.sat.python import cp_model
 
-st.set_page_config(page_title="Optimizador de Turnos — Campus", layout="wide")
-st.title("Optimizador de Turnos — Conserjes Campus")
-st.caption("Basado en modelo de investigación operativa real")
+st.set_page_config(page_title="ORbit - Scheduling", layout="wide")
+st.title("ORbit - Scheduling. Optimizador de Turnos")
+st.caption("Basado en modelo de optimización matemática real")
 
 # ─── Parámetros en sidebar ───────────────────────────────────────────────────
 with st.sidebar:
@@ -16,9 +17,27 @@ with st.sidebar:
     timeout        = st.slider("Tiempo máximo de resolución (s)", 10, 1800, 300)
 
     st.divider()
-    st.caption("Turnos: 0 = Mañana, 1 = Tarde")
     cob_manana = st.number_input("Conserjes mañana por edificio", 1, 5, 2)
     cob_tarde  = st.number_input("Conserjes tarde por edificio",  1, 5, 1)
+
+    st.divider()
+    personalizar = st.checkbox("Personalizar nombres")
+
+    nombres_trabajadores = []
+    nombres_edificios_input = []
+
+    if personalizar:
+        st.markdown("**Trabajadores**")
+        for i in range(int(n_trabajadores)):
+            nombre = st.text_input(f"Trabajador {i+1}", value=f"Trabajador {i+1}", key=f"trab_{i}")
+            nombres_trabajadores.append(nombre)
+        st.markdown("**Edificios**")
+        for e in range(int(n_edificios)):
+            nombre = st.text_input(f"Edificio {e+1}", value=f"Edificio {e+1}", key=f"edif_{e}")
+            nombres_edificios_input.append(nombre)
+    else:
+        nombres_trabajadores = [f"Trabajador {i+1}" for i in range(int(n_trabajadores))]
+        nombres_edificios_input = [f"Edificio {e+1}" for e in range(int(n_edificios))]
 
 resolver = st.button("Resolver", type="primary", use_container_width=True)
 
@@ -44,8 +63,10 @@ if resolver:
 
     I = range(n_trabajadores)
     E = range(n_edificios)
-    K = range(2)          # 0=mañana, 1=tarde
+    K = range(2)
     T = range(n_semanas)
+
+    nombres_edificios = nombres_edificios_input
 
     model  = cp_model.CpModel()
     solver = cp_model.CpSolver()
@@ -72,33 +93,25 @@ if resolver:
     # z_max: máximo de semanas que coinciden dos trabajadores
     z_max = model.new_int_var(0, n_semanas * n_edificios, "z_max")
 
-
     # ── Restricciones ──────────────────────────────────────────────────────
 
-    # R1: Cada trabajador hace exactamente 1 turno por semana (en algún edificio)
     for i in I:
         for t in T:
             model.add(sum(x[i,e,k,t] for e in E for k in K) == 1)
 
-    # R2: Cobertura mínima mañana por edificio
     for e in E:
         for t in T:
             model.add(sum(x[i,e,0,t] for i in I) == cob_manana)
 
-    # R3: Cobertura mínima tarde por edificio
     for e in E:
         for t in T:
             model.add(sum(x[i,e,1,t] for i in I) == cob_tarde)
 
-    # R4: Máximo 3 semanas en el mismo edificio en ventana de 4
     for i in I:
         for e in E:
             for t in range(n_semanas - 3):
-                model.add(
-                    sum(x[i,e,k,t+d] for k in K for d in range(4)) <= 3
-                )
+                model.add(sum(x[i,e,k,t+d] for k in K for d in range(4)) <= 3)
 
-    # R5: Tras turno de tarde, siguiente turno debe ser de mañana
     for i in I:
         for t in range(n_semanas - 2):
             model.add(
@@ -106,14 +119,12 @@ if resolver:
                 sum(x[i,e,0,t+1] + x[i,e,0,t+2] for e in E)
             )
 
-    # R6: Rotación de tarde entre edificios (si n_edificios >= 2)
     if n_edificios >= 2:
         for i in I:
             for t in range(n_semanas - 3):
                 model.add(x[i,0,1,t] == x[i,1,1,t+3])
                 model.add(x[i,1,1,t] == x[i,0,1,t+3])
 
-    # R7: Definición de y (coincidencia en mañana)
     for i in I:
         for j in I:
             if i != j:
@@ -123,15 +134,11 @@ if resolver:
                         model.add(y[i,j,e,t] <= x[j,e,0,t])
                         model.add(y[i,j,e,t] >= x[i,e,0,t] + x[j,e,0,t] - 1)
 
-    # R8: z_max = max coincidencias entre cualquier par
     for i in I:
         for j in I:
             if i != j:
-                model.add(
-                    sum(y[i,j,e,t] for e in E for t in T) <= z_max
-                )
+                model.add(sum(y[i,j,e,t] for e in E for t in T) <= z_max)
 
-    # R9: Equilibrio entre edificios por trabajador (todos los pares)
     d_plus  = {}
     d_minus = {}
     if n_edificios >= 2:
@@ -149,14 +156,12 @@ if resolver:
                         model.add(d_plus[i,e1,e2]  <= dif_edificios)
                         model.add(d_minus[i,e1,e2] <= dif_edificios)
 
-    # ── Objetivo: minimizar máximo de coincidencias ─────────────────────
     model.minimize(z_max)
 
     # ── Resolver ────────────────────────────────────────────────────────
     progress = st.progress(0, text="Resolviendo...")
     t0 = time.time()
 
-    # Simulamos progreso mientras OR-Tools trabaja
     import threading
     resultado_container = [None]
 
@@ -179,7 +184,6 @@ if resolver:
     status = resultado_container[0]
     status_name = solver.status_name(status)
 
-    # ── Resultados ──────────────────────────────────────────────────────
     st.divider()
 
     if status in [cp_model.OPTIMAL, cp_model.FEASIBLE]:
@@ -187,7 +191,6 @@ if resolver:
         obj_val = solver.objective_value
         es_optimo = status == cp_model.OPTIMAL
 
-        # Métricas principales
         col1, col2, col3, col4 = st.columns(4)
         col1.metric("Estado", "Óptimo" if es_optimo else "Factible")
         col2.metric("Máx. coincidencias", int(obj_val))
@@ -197,27 +200,22 @@ if resolver:
         if not es_optimo:
             st.warning("Solución factible (no óptima) — se alcanzó el límite de tiempo.")
 
-        # Extraer solución
         vals_x = {(i,e,k,t): solver.value(x[i,e,k,t])
                   for i in I for e in E for k in K for t in T}
 
-        
         # ── Resumen por trabajador ──────────────────────────────────
-        nombres_edificios = [f"Edificio {e+1}" for e in E]
-        st.subheader("Resumen por trabajador")
-
         import pandas as pd
+        st.subheader("Resumen por trabajador")
         rows = []
         for i in I:
-            sem_edificios = {e: sum(vals_x[i,e,k,t] for k in K for t in T)
-                             for e in E}
+            sem_edificios = {e: sum(vals_x[i,e,k,t] for k in K for t in T) for e in E}
             rows.append({
-                "Trabajador": f"Trabajador {i+1}",
+                "Trabajador": nombres_trabajadores[i],
                 **{nombres_edificios[e]: int(sem_edificios[e]) for e in E},
                 "Total semanas": int(sum(sem_edificios.values()))
             })
-
-        st.dataframe(pd.DataFrame(rows), use_container_width=True, hide_index=True)
+        df_resumen = pd.DataFrame(rows)
+        st.dataframe(df_resumen, use_container_width=True, hide_index=True)
 
         # ── Coincidencias entre trabajadores ───────────────────────
         st.subheader("Semanas que coinciden en mañana")
@@ -232,14 +230,12 @@ if resolver:
                 if i < j:
                     total = sum(vals_y[i,j,e,t] for e in E for t in T)
                     coin_rows.append({
-                        "Par": f"T{i+1} — T{j+1}",
+                        "Par": f"{nombres_trabajadores[i]} — {nombres_trabajadores[j]}",
                         "Semanas coincidiendo": int(total),
                         "¿Es el máximo?": "⚠️ Sí" if int(total) == int(obj_val) else ""
                     })
 
-        df_coin = pd.DataFrame(coin_rows).sort_values(
-            "Semanas coincidiendo", ascending=False
-        )
+        df_coin = pd.DataFrame(coin_rows).sort_values("Semanas coincidiendo", ascending=False)
         st.dataframe(df_coin, use_container_width=True, hide_index=True)
 
         # ── Cuadrante visual ───────────────────────────────────────
@@ -269,7 +265,7 @@ if resolver:
                     f"<span style='background:{bg};color:{fg};"
                     f"border-radius:4px;padding:2px 6px;"
                     f"margin:1px;display:inline-block;font-size:0.85em;'>"
-                    f"T{i+1}</span>"
+                    f"{nombres_trabajadores[i]}</span>"
                 )
             return "<td style='padding:4px 8px;'>" + " ".join(partes) + "</td>"
 
@@ -306,7 +302,7 @@ if resolver:
             leyenda += (
                 f"<span style='background:{bg};color:{fg};"
                 f"border-radius:4px;padding:3px 10px;font-size:0.85em;'>"
-                f"Trabajador {i+1}</span>"
+                f"{nombres_trabajadores[i]}</span>"
             )
         leyenda += "</div>"
 
@@ -325,18 +321,47 @@ if resolver:
         </div>
         {leyenda}
         """
-
         st.markdown(tabla_html, unsafe_allow_html=True)
 
         # ── Exportar ───────────────────────────────────────────────
         st.subheader("Exportar")
-        csv = df_coin.to_csv(index=False)
-        st.download_button(
-            "Descargar coincidencias CSV",
-            csv,
-            "coincidencias.csv",
-            "text/csv"
-        )
+
+        # Construir cuadrante como DataFrame para Excel
+        cuadrante_rows = []
+        for t in T:
+            for k in K:
+                turno_label = "Mañana" if k == 0 else "Tarde"
+                fila = {"Semana": f"S{t+1}", "Turno": turno_label}
+                for e in E:
+                    trabajadores_celda = [nombres_trabajadores[i] for i in I if vals_x[i,e,k,t] == 1]
+                    fila[nombres_edificios[e]] = ", ".join(trabajadores_celda)
+                cuadrante_rows.append(fila)
+        df_cuadrante = pd.DataFrame(cuadrante_rows)
+
+        # Generar Excel con dos hojas
+        buffer = io.BytesIO()
+        with pd.ExcelWriter(buffer, engine="openpyxl") as writer:
+            df_cuadrante.to_excel(writer, sheet_name="Cuadrante", index=False)
+            df_resumen.to_excel(writer, sheet_name="Resumen por trabajador", index=False)
+            df_coin.to_excel(writer, sheet_name="Coincidencias", index=False)
+        buffer.seek(0)
+
+        col1, col2 = st.columns(2)
+        with col1:
+            st.download_button(
+                "📥 Descargar Excel",
+                buffer,
+                "turnos.xlsx",
+                "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+            )
+        with col2:
+            csv = df_coin.to_csv(index=False)
+            st.download_button(
+                "📥 Descargar coincidencias CSV",
+                csv,
+                "coincidencias.csv",
+                "text/csv"
+            )
 
     elif status == cp_model.INFEASIBLE:
         st.error("El problema es infeasible con los parámetros actuales. "
