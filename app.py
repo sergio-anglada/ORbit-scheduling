@@ -6,8 +6,26 @@ import io
 from ortools.sat.python import cp_model
 
 st.set_page_config(page_title="ORbit - Scheduling", layout="wide")
-st.title("ORbit - Scheduling. Optimizador de Turnos")
-st.caption("Basado en modelo de optimización matemática real")
+
+st.title("ORbit — Scheduling")
+st.markdown("*Optimización matemática aplicada a la toma de decisiones empresarial*")
+
+st.markdown("""
+Soy **Sergio Anglada**, investigador en el Departamento de Métodos Estadísticos de la Universidad de Zaragoza. 
+Esta herramienta nació de un problema real: los conserjes de los edificios de Matemáticas y Geológicas de la 
+Facultad de Ciencias nos pidieron ayuda para organizar sus turnos semanales. Junto con mis compañeros 
+**Herminia I. Calvete, Carmen Galé, Aitor Hernández y José A. Iranzo**, lo resolvimos con un modelo de 
+programación entera y publicamos el resultado en la revista **conCIENCIAS** (mayo 2025).
+
+A raíz de ese trabajo, nació **ORbit**: una plataforma de optimización matemática para empresas que toman 
+decisiones complejas a mano, con Excel, o directamente a ojo. El objetivo es claro: ahorrar tiempo, dinero 
+y trabajo mediante modelos que garantizan la solución óptima. La planificación de turnos es el primer problema. 
+Vendrán más.
+
+*Esta versión es un primer prototipo funcional de un módulo de scheduling.*
+""")
+
+st.divider()
 
 # ─── Parámetros en sidebar ───────────────────────────────────────────────────
 with st.sidebar:
@@ -19,8 +37,22 @@ with st.sidebar:
     timeout        = st.slider("Tiempo máximo de resolución (s)", 10, 1800, 300)
 
     st.divider()
-    cob_manana = st.number_input("Conserjes mañana por edificio", 1, 5, 2)
-    cob_tarde  = st.number_input("Conserjes tarde por edificio",  1, 5, 1)
+    personalizar_cob = st.checkbox("Personalizar cobertura por edificio")
+
+    cob_manana_e = {}
+    cob_tarde_e  = {}
+
+    if personalizar_cob:
+        for e in range(int(n_edificios)):
+            st.markdown(f"**Edificio {e+1}**")
+            cob_manana_e[e] = st.number_input(f"Mañana", 1, 5, 2, key=f"cob_m_{e}")
+            cob_tarde_e[e]  = st.number_input(f"Tarde",  1, 5, 1, key=f"cob_t_{e}")
+    else:
+        cob_manana_base = st.number_input("Conserjes mañana por edificio", 1, 5, 2)
+        cob_tarde_base  = st.number_input("Conserjes tarde por edificio",  1, 5, 1)
+        for e in range(int(n_edificios)):
+            cob_manana_e[e] = cob_manana_base
+            cob_tarde_e[e]  = cob_tarde_base
 
     st.divider()
     personalizar = st.checkbox("Personalizar nombres")
@@ -41,25 +73,32 @@ with st.sidebar:
         nombres_trabajadores = [f"Trabajador {i+1}" for i in range(int(n_trabajadores))]
         nombres_edificios_input = [f"Edificio {e+1}" for e in range(int(n_edificios))]
 
+    st.divider()
+    st.markdown("**Restricciones opcionales**")
+    usar_r4 = st.checkbox("Máx. 3 semanas consecutivas en mismo edificio", value=True)
+    usar_r5 = st.checkbox("Tras tarde, obligatorio mañana las 2 semanas siguientes", value=True)
+    usar_r6 = st.checkbox("Rotación de tarde entre edificios cada 3 semanas", value=True)
+    usar_r9 = st.checkbox("Equilibrio de semanas entre edificios", value=True)
+
 resolver = st.button("Resolver", type="primary", use_container_width=True)
 
 # ─── Solver ──────────────────────────────────────────────────────────────────
 if resolver:
 
     # ── Validación previa ────────────────────────────────────────────────
-    demanda_total = n_edificios * (cob_manana + cob_tarde)
+    demanda_total = sum(cob_manana_e[e] + cob_tarde_e[e] for e in range(int(n_edificios)))
     if n_trabajadores < demanda_total:
         st.error(
             f"❌ No hay suficientes trabajadores para cubrir todos los turnos. "
-            f"Con {n_edificios} edificio(s), {cob_manana} de mañana y {cob_tarde} de tarde por edificio, "
-            f"se necesitan exactamente **{demanda_total} trabajadores**, pero solo hay **{n_trabajadores}**."
+            f"Con la cobertura definida se necesitan exactamente **{demanda_total} trabajadores**, "
+            f"pero solo hay **{n_trabajadores}**."
         )
         st.stop()
     elif n_trabajadores > demanda_total:
         st.error(
             f"❌ Hay más trabajadores que huecos disponibles. "
-            f"Con {n_edificios} edificio(s), {cob_manana} de mañana y {cob_tarde} de tarde por edificio, "
-            f"se necesitan exactamente **{demanda_total} trabajadores**, pero hay **{n_trabajadores}**."
+            f"Con la cobertura definida se necesitan exactamente **{demanda_total} trabajadores**, "
+            f"pero hay **{n_trabajadores}**."
         )
         st.stop()
 
@@ -97,36 +136,45 @@ if resolver:
 
     # ── Restricciones ──────────────────────────────────────────────────────
 
+    # R1: Cada trabajador hace exactamente 1 turno por semana (en algún edificio)
     for i in I:
         for t in T:
             model.add(sum(x[i,e,k,t] for e in E for k in K) == 1)
 
+    # R2: Cobertura mínima mañana por edificio
     for e in E:
         for t in T:
-            model.add(sum(x[i,e,0,t] for i in I) == cob_manana)
+            model.add(sum(x[i,e,0,t] for i in I) == cob_manana_e[e])
 
+    # R3: Cobertura mínima tarde por edificio
     for e in E:
         for t in T:
-            model.add(sum(x[i,e,1,t] for i in I) == cob_tarde)
+            model.add(sum(x[i,e,1,t] for i in I) == cob_tarde_e[e])
 
-    for i in I:
-        for e in E:
-            for t in range(n_semanas - 3):
-                model.add(sum(x[i,e,k,t+d] for k in K for d in range(4)) <= 3)
+    # R4: Máximo 3 semanas en el mismo edificio en ventana de 4
+    if usar_r4:
+        for i in I:
+            for e in E:
+                for t in range(n_semanas - 3):
+                    model.add(sum(x[i,e,k,t+d] for k in K for d in range(4)) <= 3)
 
-    for i in I:
-        for t in range(n_semanas - 2):
-            model.add(
-                sum(x[i,e,1,t] for e in E) + 1 <=
-                sum(x[i,e,0,t+1] + x[i,e,0,t+2] for e in E)
-            )
+    # R5: Tras turno de tarde, siguiente turno debe ser de mañana
+    if usar_r5:
+        for i in I:
+            for t in range(n_semanas - 2):
+                model.add(
+                    sum(x[i,e,1,t] for e in E) + 1 <=
+                    sum(x[i,e,0,t+1] + x[i,e,0,t+2] for e in E)
+                )
 
-    if n_edificios >= 2:
+    # R6: Rotación de tarde entre edificios (si n_edificios >= 2)
+    if usar_r6 and n_edificios >= 2:
         for i in I:
             for t in range(n_semanas - 3):
                 model.add(x[i,0,1,t] == x[i,1,1,t+3])
                 model.add(x[i,1,1,t] == x[i,0,1,t+3])
 
+    # R7: Definición de y (coincidencia en mañana)
     for i in I:
         for j in I:
             if i != j:
@@ -136,14 +184,16 @@ if resolver:
                         model.add(y[i,j,e,t] <= x[j,e,0,t])
                         model.add(y[i,j,e,t] >= x[i,e,0,t] + x[j,e,0,t] - 1)
 
+    # R8: z_max = max coincidencias entre cualquier par
     for i in I:
         for j in I:
             if i != j:
                 model.add(sum(y[i,j,e,t] for e in E for t in T) <= z_max)
 
+    # R9: Equilibrio entre edificios por trabajador (todos los pares)
     d_plus  = {}
     d_minus = {}
-    if n_edificios >= 2:
+    if usar_r9 and n_edificios >= 2:
         for i in I:
             for e1 in E:
                 for e2 in E:
@@ -193,7 +243,7 @@ if resolver:
     st.session_state["vals_x"] = {(i,e,k,t): solver.value(x[i,e,k,t]) for i in I for e in E for k in K for t in T}
     st.session_state["vals_y"] = {(i,j,e,t): solver.value(y[i,j,e,t]) for i in I for j in I if i != j for e in E for t in T}
     st.session_state["obj_val"] = solver.objective_value
-    st.session_state["params"] = (list(I), list(E), list(K), list(T), nombres_trabajadores, nombres_edificios, cob_manana, cob_tarde, dif_edificios)
+    st.session_state["params"] = (list(I), list(E), list(K), list(T), nombres_trabajadores, nombres_edificios, cob_manana_e, cob_tarde_e, dif_edificios, usar_r4, usar_r5, usar_r6, usar_r9)
 
     st.divider()
 
@@ -203,7 +253,7 @@ if resolver:
         es_optimo = status == cp_model.OPTIMAL
         vals_x = st.session_state["vals_x"]
         vals_y = st.session_state["vals_y"]
-        I, E, K, T, nombres_trabajadores, nombres_edificios, cob_manana, cob_tarde, dif_edificios = st.session_state["params"]
+        I, E, K, T, nombres_trabajadores, nombres_edificios, cob_manana_e, cob_tarde_e, dif_edificios, usar_r4, usar_r5, usar_r6, usar_r9 = st.session_state["params"]
         I, E, K, T = range(len(I)), range(len(E)), range(len(K)), range(len(T))
 
         col1, col2, col3, col4 = st.columns(4)
@@ -354,7 +404,7 @@ if resolver:
         color_map = {nombres_trabajadores[i]: i for i in I}
 
         # Construir cuadrante con una columna por puesto por edificio
-        max_puestos = max(cob_manana, cob_tarde)
+        max_puestos = max(max(cob_manana_e.values()), max(cob_tarde_e.values()))
         cabeceras_cuadrante = ["Semana", "Turno"]
         for e in E:
             for p in range(max_puestos):
@@ -474,7 +524,11 @@ if resolver:
             )
 
     elif status == cp_model.INFEASIBLE:
-        st.error("El problema es infeasible con los parámetros actuales. "
-                 "Prueba a aumentar Δ o reducir la cobertura mínima.")
+        st.error(
+            "❌ El problema no tiene solución con las restricciones y parámetros actuales. "
+            "Posibles causas: la cobertura definida es incompatible con las restricciones de rotación activas, "
+            "o no hay suficientes trabajadores para cumplir todas las condiciones a la vez. "
+            "Prueba a desactivar alguna restricción opcional o ajustar la cobertura."
+        )
     else:
         st.warning(f"Estado: {status_name}. Prueba a aumentar el tiempo máximo.")
