@@ -186,12 +186,25 @@ if resolver:
     status = resultado_container[0]
     status_name = solver.status_name(status)
 
+    st.session_state["status"] = status
+    st.session_state["status_name"] = status_name
+    st.session_state["elapsed_total"] = elapsed_total
+    st.session_state["solver"] = solver
+    st.session_state["vals_x"] = {(i,e,k,t): solver.value(x[i,e,k,t]) for i in I for e in E for k in K for t in T}
+    st.session_state["vals_y"] = {(i,j,e,t): solver.value(y[i,j,e,t]) for i in I for j in I if i != j for e in E for t in T}
+    st.session_state["obj_val"] = solver.objective_value
+    st.session_state["params"] = (list(I), list(E), list(K), list(T), nombres_trabajadores, nombres_edificios, cob_manana, cob_tarde, dif_edificios)
+
     st.divider()
 
     if status in [cp_model.OPTIMAL, cp_model.FEASIBLE]:
 
-        obj_val = solver.objective_value
+        obj_val = st.session_state["obj_val"]
         es_optimo = status == cp_model.OPTIMAL
+        vals_x = st.session_state["vals_x"]
+        vals_y = st.session_state["vals_y"]
+        I, E, K, T, nombres_trabajadores, nombres_edificios, cob_manana, cob_tarde, dif_edificios = st.session_state["params"]
+        I, E, K, T = range(len(I)), range(len(E)), range(len(K)), range(len(T))
 
         col1, col2, col3, col4 = st.columns(4)
         col1.metric("Estado", "Óptimo" if es_optimo else "Factible")
@@ -202,8 +215,6 @@ if resolver:
         if not es_optimo:
             st.warning("Solución factible (no óptima) — se alcanzó el límite de tiempo.")
 
-        vals_x = {(i,e,k,t): solver.value(x[i,e,k,t])
-                  for i in I for e in E for k in K for t in T}
 
         # ── Resumen por trabajador ──────────────────────────────────
         import pandas as pd
@@ -221,10 +232,6 @@ if resolver:
 
         # ── Coincidencias entre trabajadores ───────────────────────
         st.subheader("Semanas que coinciden en mañana")
-
-        vals_y = {(i,j,e,t): solver.value(y[i,j,e,t])
-                  for i in I for j in I if i != j
-                  for e in E for t in T}
 
         coin_rows = []
         for i in I:
@@ -470,260 +477,4 @@ if resolver:
         st.error("El problema es infeasible con los parámetros actuales. "
                  "Prueba a aumentar Δ o reducir la cobertura mínima.")
     else:
-        st.warning(f"Estado: {status_name}. Prueba a aumentar el tiempo máximo.")
-    for i in I:
-        for t in range(n_semanas - 2):
-            model.add(
-                sum(x[i,e,1,t] for e in E) + 1 <=
-                sum(x[i,e,0,t+1] + x[i,e,0,t+2] for e in E)
-            )
-
-    if n_edificios >= 2:
-        for i in I:
-            for t in range(n_semanas - 3):
-                model.add(x[i,0,1,t] == x[i,1,1,t+3])
-                model.add(x[i,1,1,t] == x[i,0,1,t+3])
-
-    for i in I:
-        for j in I:
-            if i != j:
-                for e in E:
-                    for t in T:
-                        model.add(y[i,j,e,t] <= x[i,e,0,t])
-                        model.add(y[i,j,e,t] <= x[j,e,0,t])
-                        model.add(y[i,j,e,t] >= x[i,e,0,t] + x[j,e,0,t] - 1)
-
-    for i in I:
-        for j in I:
-            if i != j:
-                model.add(sum(y[i,j,e,t] for e in E for t in T) <= z_max)
-
-    d_plus  = {}
-    d_minus = {}
-    if n_edificios >= 2:
-        for i in I:
-            for e1 in E:
-                for e2 in E:
-                    if e1 < e2:
-                        d_plus[i,e1,e2]  = model.new_int_var(0, n_semanas, f"dp_{i}_{e1}_{e2}")
-                        d_minus[i,e1,e2] = model.new_int_var(0, n_semanas, f"dm_{i}_{e1}_{e2}")
-                        model.add(
-                            sum(x[i,e1,k,t] for k in K for t in T) -
-                            sum(x[i,e2,k,t] for k in K for t in T) ==
-                            d_plus[i,e1,e2] - d_minus[i,e1,e2]
-                        )
-                        model.add(d_plus[i,e1,e2]  <= dif_edificios)
-                        model.add(d_minus[i,e1,e2] <= dif_edificios)
-
-    model.minimize(z_max)
-
-    # ── Resolver ────────────────────────────────────────────────────────
-    progress = st.progress(0, text="Resolviendo...")
-    t0 = time.time()
-
-    import threading
-    resultado_container = [None]
-
-    def run_solver():
-        resultado_container[0] = solver.solve(model)
-
-    thread = threading.Thread(target=run_solver)
-    thread.start()
-
-    while thread.is_alive():
-        elapsed = time.time() - t0
-        pct = min(int(elapsed / timeout * 90), 90)
-        progress.progress(pct, text=f"Resolviendo... {elapsed:.0f}s")
-        time.sleep(0.5)
-
-    thread.join()
-    progress.progress(100, text="Listo")
-    elapsed_total = time.time() - t0
-
-    status = resultado_container[0]
-    status_name = solver.status_name(status)
-
-    st.divider()
-
-    if status in [cp_model.OPTIMAL, cp_model.FEASIBLE]:
-
-        obj_val = solver.objective_value
-        es_optimo = status == cp_model.OPTIMAL
-
-        col1, col2, col3, col4 = st.columns(4)
-        col1.metric("Estado", "Óptimo" if es_optimo else "Factible")
-        col2.metric("Máx. coincidencias", int(obj_val))
-        col3.metric("Tiempo", f"{elapsed_total:.1f}s")
-        col4.metric("Semanas", n_semanas)
-
-        if not es_optimo:
-            st.warning("Solución factible (no óptima) — se alcanzó el límite de tiempo.")
-
-        vals_x = {(i,e,k,t): solver.value(x[i,e,k,t])
-                  for i in I for e in E for k in K for t in T}
-
-        # ── Resumen por trabajador ──────────────────────────────────
-        import pandas as pd
-        st.subheader("Resumen por trabajador")
-        rows = []
-        for i in I:
-            sem_edificios = {e: sum(vals_x[i,e,k,t] for k in K for t in T) for e in E}
-            rows.append({
-                "Trabajador": nombres_trabajadores[i],
-                **{nombres_edificios[e]: int(sem_edificios[e]) for e in E},
-                "Total semanas": int(sum(sem_edificios.values()))
-            })
-        df_resumen = pd.DataFrame(rows)
-        st.dataframe(df_resumen, use_container_width=True, hide_index=True)
-
-        # ── Coincidencias entre trabajadores ───────────────────────
-        st.subheader("Semanas que coinciden en mañana")
-
-        vals_y = {(i,j,e,t): solver.value(y[i,j,e,t])
-                  for i in I for j in I if i != j
-                  for e in E for t in T}
-
-        coin_rows = []
-        for i in I:
-            for j in I:
-                if i < j:
-                    total = sum(vals_y[i,j,e,t] for e in E for t in T)
-                    coin_rows.append({
-                        "Par": f"{nombres_trabajadores[i]} — {nombres_trabajadores[j]}",
-                        "Semanas coincidiendo": int(total),
-                        "¿Es el máximo?": "⚠️ Sí" if int(total) == int(obj_val) else ""
-                    })
-
-        df_coin = pd.DataFrame(coin_rows).sort_values("Semanas coincidiendo", ascending=False)
-        st.dataframe(df_coin, use_container_width=True, hide_index=True)
-
-        # ── Cuadrante visual ───────────────────────────────────────
-        st.subheader("Cuadrante completo")
-
-        COLORES = [
-            "#4e79a7","#f28e2b","#e15759","#76b7b2","#59a14f",
-            "#edc948","#b07aa1","#ff9da7","#9c755f","#bab0ac",
-            "#1f77b4","#ff7f0e","#2ca02c","#d62728","#9467bd",
-            "#8c564b","#e377c2","#7f7f7f","#bcbd22","#17becf",
-        ]
-
-        def color_texto(hex_bg):
-            h = hex_bg.lstrip("#")
-            r, g, b = int(h[0:2],16), int(h[2:4],16), int(h[4:6],16)
-            luminancia = (0.299*r + 0.587*g + 0.114*b) / 255
-            return "#000000" if luminancia > 0.5 else "#ffffff"
-
-        def celda(trabajadores):
-            if not trabajadores:
-                return "<td style='padding:4px 8px;'></td>"
-            partes = []
-            for i in trabajadores:
-                bg = COLORES[i % len(COLORES)]
-                fg = color_texto(bg)
-                partes.append(
-                    f"<span style='background:{bg};color:{fg};"
-                    f"border-radius:4px;padding:2px 6px;"
-                    f"margin:1px;display:inline-block;font-size:0.85em;'>"
-                    f"{nombres_trabajadores[i]}</span>"
-                )
-            return "<td style='padding:4px 8px;'>" + " ".join(partes) + "</td>"
-
-        cabecera_cols = "<th style='padding:4px 8px;'>Semana</th><th style='padding:4px 8px;'>Turno</th>"
-        for e in E:
-            cabecera_cols += f"<th style='padding:4px 8px;'>{nombres_edificios[e]}</th>"
-
-        filas_html = ""
-        for t in T:
-            bg_fila_m = "#f0f4f8" if t % 2 == 0 else "#ffffff"
-            bg_fila_t = "#dce8f0" if t % 2 == 0 else "#eef4f8"
-
-            fila_m = f"<tr style='background:{bg_fila_m};'>"
-            fila_m += f"<td rowspan='2' style='padding:4px 8px;font-weight:bold;vertical-align:middle;'>S{t+1}</td>"
-            fila_m += f"<td style='padding:4px 8px;font-size:0.8em;color:#555;'>🌅 Mañana</td>"
-            for e in E:
-                trabajadores_celda = [i for i in I if vals_x[i,e,0,t] == 1]
-                fila_m += celda(trabajadores_celda)
-            fila_m += "</tr>"
-
-            fila_t = f"<tr style='background:{bg_fila_t};'>"
-            fila_t += f"<td style='padding:4px 8px;font-size:0.8em;color:#555;'>🌆 Tarde</td>"
-            for e in E:
-                trabajadores_celda = [i for i in I if vals_x[i,e,1,t] == 1]
-                fila_t += celda(trabajadores_celda)
-            fila_t += "</tr>"
-
-            filas_html += fila_m + fila_t
-
-        leyenda = "<div style='margin-top:12px;display:flex;flex-wrap:wrap;gap:8px;'>"
-        for i in I:
-            bg = COLORES[i % len(COLORES)]
-            fg = color_texto(bg)
-            leyenda += (
-                f"<span style='background:{bg};color:{fg};"
-                f"border-radius:4px;padding:3px 10px;font-size:0.85em;'>"
-                f"{nombres_trabajadores[i]}</span>"
-            )
-        leyenda += "</div>"
-
-        tabla_html = f"""
-        <div style='overflow-x:auto;'>
-        <table style='border-collapse:collapse;width:100%;font-size:0.9em;'>
-          <thead>
-            <tr style='background:#2c3e50;color:white;'>
-              {cabecera_cols}
-            </tr>
-          </thead>
-          <tbody>
-            {filas_html}
-          </tbody>
-        </table>
-        </div>
-        {leyenda}
-        """
-        st.markdown(tabla_html, unsafe_allow_html=True)
-
-        # ── Exportar ───────────────────────────────────────────────
-        st.subheader("Exportar")
-
-        # Construir cuadrante como DataFrame para Excel
-        cuadrante_rows = []
-        for t in T:
-            for k in K:
-                turno_label = "Mañana" if k == 0 else "Tarde"
-                fila = {"Semana": f"S{t+1}", "Turno": turno_label}
-                for e in E:
-                    trabajadores_celda = [nombres_trabajadores[i] for i in I if vals_x[i,e,k,t] == 1]
-                    fila[nombres_edificios[e]] = ", ".join(trabajadores_celda)
-                cuadrante_rows.append(fila)
-        df_cuadrante = pd.DataFrame(cuadrante_rows)
-
-        # Generar Excel con dos hojas
-        buffer = io.BytesIO()
-        with pd.ExcelWriter(buffer, engine="openpyxl") as writer:
-            df_cuadrante.to_excel(writer, sheet_name="Cuadrante", index=False)
-            df_resumen.to_excel(writer, sheet_name="Resumen por trabajador", index=False)
-            df_coin.to_excel(writer, sheet_name="Coincidencias", index=False)
-        buffer.seek(0)
-
-        col1, col2 = st.columns(2)
-        with col1:
-            st.download_button(
-                "📥 Descargar Excel",
-                buffer,
-                "turnos.xlsx",
-                "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-            )
-        with col2:
-            csv = df_coin.to_csv(index=False)
-            st.download_button(
-                "📥 Descargar coincidencias CSV",
-                csv,
-                "coincidencias.csv",
-                "text/csv"
-            )
-
-    elif status == cp_model.INFEASIBLE:
-        st.error("El problema es infeasible con los parámetros actuales. "
-                 "Prueba a aumentar Δ o reducir la cobertura mínima.")
-    else:
-        st.warning(f"Estado: {status_name}. Prueba a aumentar el tiempo máximo.")
+        st.warning(f"Estado: {status_name}. Prue
