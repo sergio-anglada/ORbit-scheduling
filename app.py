@@ -453,7 +453,8 @@ if resolver:
                 "📥 Descargar Excel",
                 buffer,
                 "turnos.xlsx",
-                "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+                "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                key="download_excel"
             )
         with col2:
             csv = df_coin.to_csv(index=False)
@@ -461,7 +462,8 @@ if resolver:
                 "📥 Descargar coincidencias CSV",
                 csv,
                 "coincidencias.csv",
-                "text/csv"
+                "text/csv",
+                key="download_csv"
             )
 
     elif status == cp_model.INFEASIBLE:
