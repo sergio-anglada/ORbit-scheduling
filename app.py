@@ -477,4 +477,4 @@ if resolver:
         st.error("El problema es infeasible con los parámetros actuales. "
                  "Prueba a aumentar Δ o reducir la cobertura mínima.")
     else:
-        st.warning(f"Estado: {status_name}. Prue
+        st.warning(f"Estado: {status_name}. Prueba a aumentar el tiempo máximo.")
